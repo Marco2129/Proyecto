@@ -1,0 +1,198 @@
+---
+title: "Limpieza, transformacion, EDA y visualizacion de datos"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r echo = FALSE, eval = TRUE, warning = FALSE, message = FALSE}
+library(dplyr)
+library(mice)
+library(ggplot2)
+library(MASS)
+library(corrplot)
+library(pscl)
+library(statmod)
+```
+
+Queremos responder la siguiente pregunta ¿Existe una variación importante entre el número de semanas de gestación obtenido a partir de la última menstruación y el determinado por ultrasonido. ¿Esta variación se relaciona con la edad o el nivel educativo?
+
+Para esto lo que hacemos primero es seleccionar las variables importantes, estas son las que nos servirán para responder las preguntas, además a las variables categóricas las convertidos en factores, además contaremos la cantidad de datos faltantes
+
+sapply(datos1, function(x) mean(is.na(x)) \* 100)
+
+```{r,results = 'hide', echo = FALSE, eval = TRUE, warning = FALSE, message = FALSE}
+
+datos <- read.csv("12.csv")
+summary(datos)
+
+#Seleccionar las variables importantes para las preguntas
+datos1 <- datos %>% dplyr::select(edad,estado_civil,nivel_edu,ocupacion,religion,edad_primera_menstruacion,edad_inicio_vida_sexual,semanas_embarazo,numero_embarazos,numero_abortos,numero_partos,numero_cesareas,numero_iles,recibio_consejeria,uso_anticonceptivo,entidad,se_complica,procedimiento_ile,semanas_gestacion_usg)
+
+#Convertir las variables categoricas en numeros usando la funcion factor
+datos1$estado_civil <- as.numeric(factor(datos1$estado_civil))
+datos1$nivel_edu <- as.numeric(factor(datos1$nivel_edu))
+datos1$ocupacion <- as.numeric(factor(datos1$ocupacion))
+datos1$religion <- as.numeric(factor(datos1$religion))
+datos1$se_complica <- ifelse(datos1$se_complica== "No", 0,1)
+datos1$entidad <- as.numeric(factor(datos1$entidad))
+datos1$recibio_consejeria <- ifelse(datos1$recibio_consejeria== "No", 0,1)
+datos1$uso_anticonceptivo <- as.numeric(factor(datos1$uso_anticonceptivo))
+datos$anticonceptivo_post <- as.numeric(factor(datos$anticonceptivo_post))
+datos1$procedimiento_ile <- as.numeric(factor(datos1$procedimiento_ile))
+
+faltantes_datos_1<-apply(X = is.na(datos1), MARGIN = 2, FUN = sum)
+faltantes_datos_1
+
+
+```
+
+```{r}
+sapply(datos1, function(x) mean(is.na(x)) * 100)
+```
+
+Posteriormente realizamos una imputación usando MICE, el metodo pmm y con esto finalmente tendremos nuestra base de datos más completa, solo elegiendo imputar cuando no falten más del 30% de los datos a la variable
+
+```{r,results = 'hide', echo = FALSE, eval = TRUE, warning = FALSE, message = FALSE}
+
+imp <- mice(datos1, meth = c("pmm", "pmm","pmm", "pmm","pmm","pmm", "pmm", "pmm", "pmm", "pmm", "pmm", "pmm","pmm","pmm", "pmm","pmm", "pmm", "pmm", "pmm"), m=20)
+
+imputacion<-complete(imp)
+head(imputacion)
+
+imputacion <- cbind(imputacion, datos[, c("numero_hijos", "anticonceptivo_post")])
+
+
+```
+
+```{r}
+sapply(imputacion, function(x) mean(is.na(x)) * 100)
+```
+
+Después de haber realizado la imputación, creamos una nueva columna de la diferencia absoluta de las semanas de embarazo por ultima menstruacion y de las de embarazo por ultrasonido, encontrando que el máximo de esta diferencia es de 35 semanas, y decidimos hacer una prueba para ver si al cuantil 70 habia suficiente diferencia, lo cual no sucede y por eso podemos concluir que no hay diferencia significativa.
+
+```{r,results = 'hide', echo = FALSE, eval = TRUE, warning = FALSE, message = FALSE}
+
+imputacion <- imputacion %>%
+  mutate(diferencia = abs(semanas_gestacion_usg - semanas_embarazo))
+
+max(imputacion$diferencia)
+
+q_05 <- quantile(imputacion$diferencia, 0.70)
+
+```
+
+```{r}
+wilcox.test(imputacion$diferencia, mu = q_05, alternative = "less")
+```
+
+Esto se apoya en que se estima a nivel mundial que una cantidad estimada del 14 % al 25 % de las mujeres en edad de procrear tiene irregularidades menstruales <https://espanol.nichd.nih.gov/salud/temas/menstruation/informacion/mujeres> y en general, solo estas mujeres muy irregulares presentan diferencias significativas en la diferencia de sus semanas, por lo que además viendo el histograma es lógico pensar que realmente las diferencias no son significativas considerando a 2 semanas como el valor de corte, y son muy pocas las mujeres que tienen más de dos semanas para considerar que es una cantidad significativa.
+
+```{r}
+hist(imputacion$diferencia)
+```
+
+Y tambien en el histograma se puede ver que muy pocas mujeres llegan a presentar una diferencia de hasta más de un mes, por lo que en general no es una diferencia significativa
+
+```{r,results = 'hide', echo = FALSE, eval = TRUE, warning = FALSE, message = FALSE}
+
+modelo <- lm(diferencia ~ edad + nivel_edu, data = imputacion)
+
+test1<- cor.test(imputacion$diferencia,imputacion$nivel_edu, method = "spearman")
+test2<- cor.test(imputacion$diferencia,imputacion$edad, method = "spearman")
+
+```
+
+```{r}
+summary(modelo)
+cor(imputacion$diferencia,imputacion$nivel_edu)
+cor(imputacion$diferencia,imputacion$edad)
+print(test1)
+print(test2)
+```
+
+Después para ver si había relación de la diferencia con la edad o el nivel educativo, se calculo la correlacion y se hizo un modelo de regresión, encontrando que sí hay correlación, pero esta es muy débil
+
+Por lo que podemos concluir que, al calcular las correlaciones y hacer una prueba para ver si la correlacion es diferente de cero, encontramos que lo es, sin embargo el valor de correlacion obtenido tanto aqui como al tratar de ajustar un modelo de regresion es muy pequeño, por lo que podemos concluir que la correlación no es lo suficiente significativa para decir que se relaciona con alguna de las dos variables.
+
+
+Ahora buscamos responder ¿Cómo caracterizaría a la población que más utiliza la ile?, y para esto decidimos calcular primero las correlaciones entre las variables:
+
+```{r echo = FALSE, eval = TRUE, warning = FALSE, message = TRUE}
+corr_matrix <- cor(imputacion[, sapply(imputacion, is.numeric)], use = "complete.obs")
+corrplot(corr_matrix, method = "circle")
+numeroiles <- cor(imputacion$numero_iles,imputacion)
+abs(numeroiles)
+```
+
+Además como observación, hay un caso de 9 iles, dos casos de 6 iles, 4 casos de 5 iles, siendo en general datos muy atipicos en los que hay tantos iles, y también podemos ver que el numero de embarazos y la edad son las variables que mejor nos permitirian caracterizar a la poblacion, al ser estas las más correlacionadas.
+
+```{r echo = FALSE, eval = TRUE, warning = FALSE, message = TRUE}
+modelo_1 <- lm(numero_iles ~ edad+numero_embarazos, data= imputacion)
+summary(modelo_1)
+```
+
+Entonces después de hacer un modelo lineal multiple con solo esas dos variables, encontramos que realmente su ajuste es bastante pobre, al tener una R\^2 solo de 0.15, bastante insuficiente, por lo que tomando el enfoque de stepwise de hacer un modelo con todas las variables y solo quedarnos con las mas importantes llegamos a esto:
+
+```{r,results = 'hide', echo = FALSE, eval = TRUE, warning = FALSE, message = FALSE}
+
+#Por otro lado usando un enfoque distinto, al usar todas las variables y quedarnos con las mejores usando el metodo stepwise
+
+modelo_completo <- lm(numero_iles ~ ., data = imputacion)
+
+# Modelo de selección stepwise
+modelo_step <- step(modelo_completo, direction = "both")
+
+```
+
+```{r}
+# Resumen del modelo final
+summary(modelo_step)
+```
+
+Un modelo que en vez de usar 2 variables como el anterior, termina usando 15 variables de las 21 que habia en total, con esto terminamos con un modelo con mejor ajuste, pero dificil de interpretar debido a tantas variables, ademas de que debido a lo discretas que son estas variables, buscar realizar un PCA no seria adecuado, ademas crear indices entre estas variables tampoco parece algo tan viable, por lo que usando un ultimo enfoque llegamos a otra alternativa de modelo.
+
+Para este ultimo enfoque se decidió asignar 1 a las personas con 0 iles, un 2 a las personas con una ile y 3 a las personas con más de una Ile, viendo la comparativa de la distribución antes de esta asignación contra la nueva después de la asignación:
+
+```{r echo = FALSE, eval = TRUE, warning = FALSE, message = TRUE}
+hist(imputacion$numero_iles)
+
+transformacion<- as.vector(imputacion$numero_iles)
+resultado <- ifelse(transformacion < 1, 1,
+                    ifelse(transformacion ==1, 2, 3))
+hist(resultado)
+```
+
+Aquí podemos ver que igual la mayor cantidad de la población no ha sufrido ILE, una pequeña cantidad ha usado al menos una vez, y una infima cantidad ha usado más de 2, entonces al ver las similitudes de esto con una variable de conteo al solo tener numeros enteros y positivos buscamos ajustar diversos modelos, algunos ajustaron mejor, aunque siempre teniendo el problema de lo complicado que se volvio encontrar una transformación adecuada para esta variable que se busca explicar.
+
+```{r,results = 'hide', echo = FALSE, eval = TRUE, warning = FALSE, message = FALSE}
+
+#Este tipo de modelo se utiliza cuando la variable dependiente es una variable de conteo (es decir, números enteros no negativos) y se asume que los datos siguen una distribución de Poisson.
+
+modelo_poisson1<- glm(resultado  ~ ., data = imputacion, family = poisson)
+modelo_poisson <- update(modelo_poisson1,resultado ~ . - numero_iles)
+summary(modelo_poisson)
+
+#Si hay una dispersion mayor a 1, indica que hay sobredispersion
+dispersion <- sum(residuals(modelo_poisson, type = "pearson")^2) / df.residual(modelo_poisson)
+cat("Dispersion de Pearson:", dispersion, "\n")
+
+modelo_gamma1<- glm(resultado  ~ ., data = imputacion, family = Gamma(link = "log"))
+modelo_gamma <- update(modelo_gamma1,resultado ~ . - numero_iles)
+summary(modelo_gamma)
+modelo_seleccionado <- step(modelo_gamma, direction = "both")
+summary(modelo_seleccionado)
+
+```
+
+```{r}
+summary(modelo_poisson)
+summary(modelo_seleccionado)
+```
+
+Por lo que, despues de evaluar diversos modelos de conteo, elegimos un modelo Gamma con el metodo stepwise al tener el menor AIC de todos, quedandonos con las mismas 15 variables del modelo lineal multiple. Por lo tanto hemos obtenido que sí es posible caracterizar a la variable numero de iles, todo dependiendo del enfoque que queremos buscar, y también el número de variables dependerá si queremos un mejor ajuste a cambio de una interpretación más compleja o si buscamos una mejor interpretación a cambio de un peor ajuste.
